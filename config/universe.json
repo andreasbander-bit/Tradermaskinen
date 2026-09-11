@@ -1,0 +1,13 @@
+{
+  "US": [
+    "AAPL.US",
+    "TSLA.US",
+    "NVDA.US",
+    "AMD.US"
+  ],
+  "SE": [
+    "INVE-B.ST",
+    "SAAB-B.ST",
+    "VOLV-B.ST"
+  ]
+}
