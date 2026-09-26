@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any
 
 import requests
@@ -24,6 +24,17 @@ class ProviderError(RuntimeError):
     """Raised when a market-data provider returns an unusable response."""
 
 
+def _to_unix_timestamp(value: datetime | date) -> int:
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        utc_value = value.astimezone(timezone.utc)
+    else:
+        utc_value = datetime.combine(value, time.min, tzinfo=timezone.utc)
+
+    return int(utc_value.timestamp())
+
+
 class EODHDProvider:
     BASE_URL = "https://eodhd.com/api"
 
@@ -41,17 +52,27 @@ class EODHDProvider:
         params = {
             "api_token": self.api_key,
             "interval": "1h",
-            "from": int(start.astimezone(timezone.utc).timestamp()),
-            "to": int(end.astimezone(timezone.utc).timestamp()),
+            "from": _to_unix_timestamp(start),
+            "to": _to_unix_timestamp(end),
             "fmt": "json",
         }
 
-        response = requests.get(
-            f"{self.BASE_URL}/intraday/{symbol}",
-            params=params,
-            timeout=30,
-        )
-        response.raise_for_status()
+        try:
+            response = requests.get(
+                f"{self.BASE_URL}/intraday/{symbol}",
+                params=params,
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            if exc.response is not None:
+                message = (
+                    f"EODHD request failed with HTTP "
+                    f"{exc.response.status_code}."
+                )
+            else:
+                message = f"EODHD request failed ({type(exc).__name__})."
+            raise ProviderError(message) from None
 
         payload = response.json()
 
@@ -84,7 +105,7 @@ class EODHDProvider:
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 raise ProviderError(
-                    f"Invalid EODHD bar for {symbol}: {row}"
+                    f"Invalid EODHD bar for {symbol}."
                 ) from exc
 
         return sorted(bars, key=lambda bar: bar.timestamp)
