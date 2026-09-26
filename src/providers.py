@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 import requests
+
+from src.sessions import NEW_YORK
 
 
 @dataclass(frozen=True)
@@ -185,6 +187,183 @@ class TwelveDataProvider:
             except (KeyError, TypeError, ValueError) as exc:
                 raise ProviderError(
                     f"Invalid Twelve Data bar for {symbol}: {row}"
+                ) from exc
+
+        return sorted(bars, key=lambda bar: bar.timestamp)
+
+    def get_1m(
+        self,
+        symbol: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[MarketBar]:
+        params = {
+            "symbol": symbol,
+            "interval": "1min",
+            "start_date": start.astimezone(timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "end_date": end.astimezone(timezone.utc).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ),
+            "timezone": "UTC",
+            "outputsize": 5000,
+            "apikey": self.api_key,
+        }
+
+        try:
+            response = requests.get(
+                f"{self.BASE_URL}/time_series",
+                params=params,
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            if exc.response is not None:
+                message = (
+                    "Twelve Data 1M request failed with HTTP "
+                    f"{exc.response.status_code}."
+                )
+            else:
+                message = (
+                    "Twelve Data 1M request failed "
+                    f"({type(exc).__name__})."
+                )
+            raise ProviderError(message) from None
+
+        payload: dict[str, Any] = response.json()
+
+        if payload.get("status") == "error":
+            raise ProviderError(
+                f"Twelve Data 1M request failed with API code "
+                f"{payload.get('code', 'unknown')}."
+            )
+
+        values = payload.get("values")
+        if not isinstance(values, list):
+            raise ProviderError(
+                f"Twelve Data returned unexpected 1M response for {symbol}."
+            )
+
+        bars: list[MarketBar] = []
+        for row in values:
+            try:
+                timestamp = datetime.strptime(
+                    row["datetime"],
+                    "%Y-%m-%d %H:%M:%S",
+                ).replace(tzinfo=timezone.utc)
+                bars.append(
+                    MarketBar(
+                        symbol=symbol,
+                        timestamp=timestamp,
+                        open=float(row["open"]),
+                        high=float(row["high"]),
+                        low=float(row["low"]),
+                        close=float(row["close"]),
+                        volume=float(row["volume"]),
+                        provider="Twelve Data",
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ProviderError(
+                    f"Invalid Twelve Data 1M bar for {symbol}."
+                ) from exc
+
+        return sorted(bars, key=lambda bar: bar.timestamp)
+
+    def get_daily(
+        self,
+        symbol: str,
+        start_date: date,
+        end_date: date,
+    ) -> list[MarketBar]:
+        params = {
+            "symbol": symbol,
+            "interval": "1day",
+            "start_date": datetime.combine(
+                start_date,
+                time.min,
+            ).strftime("%Y-%m-%d %H:%M:%S"),
+            "end_date": datetime.combine(
+                end_date + timedelta(days=1),
+                time.min,
+            ).strftime("%Y-%m-%d %H:%M:%S"),
+            "timezone": "America/New_York",
+            "outputsize": 5000,
+            "apikey": self.api_key,
+        }
+
+        try:
+            response = requests.get(
+                f"{self.BASE_URL}/time_series",
+                params=params,
+                timeout=30,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            if exc.response is not None:
+                message = (
+                    "Twelve Data daily request failed with HTTP "
+                    f"{exc.response.status_code}."
+                )
+            else:
+                message = (
+                    "Twelve Data daily request failed "
+                    f"({type(exc).__name__})."
+                )
+            raise ProviderError(message) from None
+
+        payload: dict[str, Any] = response.json()
+
+        if payload.get("status") == "error":
+            api_code = payload.get("code")
+            if not isinstance(api_code, (int, str)) or not str(api_code).isdigit():
+                api_code = "unknown"
+            raise ProviderError(
+                f"Twelve Data daily request failed with API code {api_code}."
+            )
+
+        values = payload.get("values")
+
+        if not isinstance(values, list):
+            raise ProviderError(
+                f"Twelve Data returned unexpected response for {symbol}."
+            )
+
+        bars: list[MarketBar] = []
+
+        for row in values:
+            try:
+                try:
+                    local_timestamp = datetime.strptime(
+                        row["datetime"],
+                        "%Y-%m-%d",
+                    )
+                except ValueError:
+                    local_timestamp = datetime.strptime(
+                        row["datetime"],
+                        "%Y-%m-%d %H:%M:%S",
+                    )
+
+                timestamp = local_timestamp.replace(
+                    tzinfo=NEW_YORK
+                ).astimezone(timezone.utc)
+
+                bars.append(
+                    MarketBar(
+                        symbol=symbol,
+                        timestamp=timestamp,
+                        open=float(row["open"]),
+                        high=float(row["high"]),
+                        low=float(row["low"]),
+                        close=float(row["close"]),
+                        volume=float(row["volume"]),
+                        provider="Twelve Data",
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ProviderError(
+                    f"Invalid Twelve Data daily bar for {symbol}."
                 ) from exc
 
         return sorted(bars, key=lambda bar: bar.timestamp)
